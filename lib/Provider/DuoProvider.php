@@ -25,11 +25,15 @@ use OCA\TwoFactorDuo\Web;
 use OCP\AppFramework\Http\ContentSecurityPolicy;
 use OCP\Authentication\TwoFactorAuth\IProvider;
 use OCP\Authentication\TwoFactorAuth\IProvidesCustomCSP;
+
+use OCP\Authentication\TwoFactorAuth\IActivatableByAdmin;
+use OCP\Authentication\TwoFactorAuth\IDeactivatableByAdmin;
+
 use OCP\IConfig;
 use OCP\IUser;
 use OCP\Template;
 
-class DuoProvider implements IProvider, IProvidesCustomCSP {
+class DuoProvider implements IProvider, IProvidesCustomCSP, IActivatableByAdmin, IDeactivatableByAdmin {
 
 	/** @var IConfig */
 	private $config;
@@ -126,6 +130,32 @@ class DuoProvider implements IProvider, IProvidesCustomCSP {
 	 * @return boolean
 	 */
 	public function isTwoFactorAuthEnabledForUser(IUser $user) : bool {
+		return true;
+	}
+	
+	/**
+	 * Disable this provider for the given user.
+	 *
+	 * @param IUser $user the user to deactivate this provider for
+	 *
+	 * @return void
+	 *
+	 * @since 15.0.0
+	 */
+	public function disableFor(IUser $user) : bool {
+		return true;
+	}
+	
+	/**
+	 * Enable this provider for the given user.
+	 *
+	 * @param IUser $user the user to activate this provider for
+	 *
+	 * @return void
+	 *
+	 * @since 15.0.0
+	 */
+	public function enableFor(IUser $user) : bool {
 		return true;
 	}
 
