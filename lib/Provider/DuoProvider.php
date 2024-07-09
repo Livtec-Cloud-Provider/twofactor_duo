@@ -21,29 +21,82 @@
 
 namespace OCA\TwoFactorDuo\Provider;
 
-use OCA\TwoFactorDuo\Web;
+use OCA\TwoFactorDuo\DuoUniversal\Client;
+use OCA\TwoFactorDuo\DuoUniversal\DuoException;
 use OCP\AppFramework\Http\ContentSecurityPolicy;
-use OCP\Authentication\TwoFactorAuth\IProvider;
-use OCP\Authentication\TwoFactorAuth\IProvidesCustomCSP;
-
 use OCP\Authentication\TwoFactorAuth\IActivatableByAdmin;
 use OCP\Authentication\TwoFactorAuth\IDeactivatableByAdmin;
-
+use OCP\Authentication\TwoFactorAuth\IProvider;
+use OCP\Authentication\TwoFactorAuth\IProvidesCustomCSP;
+use OCP\Authentication\TwoFactorAuth\IProvidesIcons;
 use OCP\IConfig;
+use OCP\IRequest;
+use OCP\ISession;
+use OCP\IURLGenerator;
 use OCP\IUser;
 use OCP\Template;
+use Psr\Log\LoggerInterface;
 
 class DuoProvider implements IProvider, IProvidesCustomCSP, IActivatableByAdmin, IDeactivatableByAdmin {
 
 	/** @var IConfig */
 	private $config;
 
-	private function getConfig() {
-		return $this->config->getSystemValue('twofactor_duo', null);
-	}
+	/** @var ISession */
+	private $session;
 
-	public function __construct(IConfig $config) {
+	/** @var IURLGenerator */
+	private $urlGenerator;
+
+	/** @var IRequest */
+	private $request;
+
+	/** @var Client */
+	private $duoClient;
+
+	/** @var LoggerInterface */
+	private $logger;
+
+	/** @var  DuoException */
+	private $duoClientInitException;
+
+	/**
+	 * Constructor of the DuoProvider.
+	 * This als initializes the Duo Client.
+	 *
+	 * @param IConfig $config
+	 * @param ISession $userSession
+	 * @param IURLGenerator $urlGenerator
+	 * @param IRequest $request
+	 * @param LoggerInterface $logger
+	 */
+	public function __construct(
+		IConfig         $config,
+		ISession        $userSession,
+		IURLGenerator   $urlGenerator,
+		IRequest        $request,
+		LoggerInterface $logger
+	) {
 		$this->config = $config;
+		$this->session = $userSession;
+		$this->urlGenerator = $urlGenerator;
+		$this->request = $request;
+		$this->logger = $logger;
+
+		// start by getting the config and
+		$config = $this->getConfig();
+		try {
+			$this->duoClient = new Client(
+				$config['client_id'],
+				$config['client_secret'],
+				$config['api_hostname'],
+				$config['redirect_uri']
+			);
+		} catch (DuoException $e) {
+			$logger->error('Could not initialize Duo Client.', [$e]);
+			// can't do anything here -> store and evaluate later
+			$this->duoClientInitException = $e;
+		}
 	}
 
 	/**
@@ -74,51 +127,93 @@ class DuoProvider implements IProvider, IProvidesCustomCSP, IActivatableByAdmin,
 	}
 
 	/**
-	 * Get the Content Security Policy for the template (required for showing external content, otherwise optional)
+	 * Generates and returns the required CSPs for the inline scripts of this
+	 * provider.
 	 *
-	 * @return ContentSecurityPolicy
+	 * @return ContentSecurityPolicy the generated CSP
 	 */
-	public function getCSP() : ContentSecurityPolicy {
+	public function getCSP(): ContentSecurityPolicy {
 		$csp = new ContentSecurityPolicy();
-		$csp->addAllowedChildSrcDomain('https://*.duosecurity.com');
-		$csp->addAllowedStyleDomain('https://*.duosecurity.com');
-		$csp->addAllowedFrameDomain('https://*.duosecurity.com');
+		// scripts that can be stored inside the session
+		$possibleScripts = ['redirect_script', 'complete_script'];
+		foreach ($possibleScripts as $script) {
+			// check if session contains script
+			if ($this->session->exists($script)) {
+				// if so, obtain the script and immediately remove it from the session
+				$scriptContent = $this->session->get($script);
+				$this->session->remove($script);
+				// calculate script CSP and add it
+				$csp->addAllowedScriptDomain($this->calculateScriptCSP($scriptContent));
+			}
+		}
 		return $csp;
 	}
 
 	/**
-	 * Get the template for rending the 2FA provider view
+	 * Get the template for rending the 2FA provider view. Depending on the presence
+	 * of get parameters and session state this has function returns different
+	 * templates.
 	 *
-	 * @param IUser $user
-	 * @return Template
+	 * @param IUser $user the user which is currently accessing the site
+	 * @return Template the template which should be shown
 	 */
-	public function getTemplate(IUser $user) : Template {
-		$config = $this->getConfig();
-		$tmpl = new Template('twofactor_duo', 'challenge');
-		$tmpl->assign('user', $user->getUID());
-		$tmpl->assign('IKEY', $config['IKEY']);
-		$tmpl->assign('SKEY', $config['SKEY']);
-		$tmpl->assign('AKEY', $config['AKEY']);
-		$tmpl->assign('HOST', $config['HOST']);
-		return $tmpl;
+	public function getTemplate(IUser $user): Template {
+		// Duo uses the error GET parameter to report back errors
+		// with error, error_description is also set
+		if ($this->request->getParam('error') != null) {
+			$this->logger->warning('Possible error from Duo 2FA.',
+				[$this->request->getParam('error'), $this->request->getParam('error_description')]);
+			return $this->showErrorPage(
+				$this->request->getParam('error') . ': ' .
+				$this->request->getParam('error_description')
+			);
+		}
+		// check if we are trying to finish up by checking if we have both
+		// the state and duo_code GET parameter set inside the URL
+		if ($this->request->getParam('state') != null &&
+			$this->request->getParam('duo_code') != null) {
+			// if both GET parameters are set, but we have no stored state inside
+			// the session, cancel and show the error page
+			if (!$this->session->exists('state')) {
+				$this->logger->warning('User submitted state and duo_code but there was no state in session.',
+					[$this->request->getParam('state'), $this->request->getParam('duo_code')]);
+				return $this->showErrorPage(
+					'No active login process found. Please try again.');
+			}
+			// if we have a stored state, get it and immediately delete it afterward
+			// since now it's been consumed.
+			$storedState = $this->session->get('state');
+			$this->session->remove('state');
+			// if the stored state does not match the GET param state, show the
+			// error page
+			if ($storedState != $this->request->getParam('state')) {
+				$this->logger->warning('User submitted state and duo_code but state did not match state in session.',
+					[$this->request->getParam('state'), $this->request->getParam('duo_code')]);
+				return $this->showErrorPage('Duo state does not match saved state.');
+			}
+			// we have the correct state and the duo code - complete the login process
+			return $this->completeLoginProcess($user, $this->request->getParam('duo_code'));
+		}
+		// we do not have the state nor duo_code, so we are at the beginning
+		// of the flow - start the login process
+		return $this->startLoginProcess($user);
 	}
 
 	/**
 	 * Verify the given challenge
 	 *
-	 * @param IUser $user
-	 * @param string $challenge
+	 * @param IUser $user the user which is currently accessing the site
+	 * @param string $challenge the challenge (complete token) that the user submitted
+	 * @return bool whether the user passed the challenge
 	 */
-	public function verifyChallenge(IUser $user, $challenge) : bool {
-		$config = $this->getConfig();
-
-		$IKEY = $config['IKEY'];
-		$SKEY = $config['SKEY'];
-		$AKEY = $config['AKEY'];
-
-		$resp = Web::verifyResponse($IKEY, $SKEY, $AKEY, $challenge);
-		if ($resp) {
+	public function verifyChallenge(IUser $user, string $challenge): bool {
+		$completeToken = $this->session->get('duo_challenge_complete_token');
+		// always remove complete token here
+		$this->session->remove('duo_challenge_complete_token');
+		if ($completeToken == $challenge) {
 			return true;
+		} else {
+			$this->logger->warning('User submitted invalid challenge for Duo 2FA.', [$user, $challenge]);
 		}
 		return false;
 	}
@@ -159,4 +254,128 @@ class DuoProvider implements IProvider, IProvidesCustomCSP, IActivatableByAdmin,
 		return true;
 	}
 
+	/**
+	 * Here we start the login process which begins by forwarding the user to Duo.
+	 *
+	 * @param IUser $user the user which is currently accessing the site
+	 * @return Template the challenge template with its data
+	 */
+	private function startLoginProcess(IUser $user): Template {
+		// first we need to check if the Duo Client could be properly initialized
+		if ($this->duoClientInitException != null) {
+			return $this->showErrorPage('Error while initializing Duo Client.');
+		}
+		// then we perform health check on the Duo Client
+		try {
+			$this->duoClient->healthCheck();
+		} catch (DuoException $e) {
+			$msg = 'Duo Client health check failed';
+			$this->logger->error($msg, [$e]);
+			// TODO add config to set if we want to fail open
+			return $this->showErrorPage($msg);
+		}
+		// generate and store the state and then create the auth URL
+		$state = $this->duoClient->generateState();
+		$this->session->set('state', $state);
+		try {
+			$prompt_uri = $this->duoClient->createAuthUrl($user->getUID(), $state);
+		} catch (DuoException $e) {
+			$msg = 'Duo auth URL could not be created.';
+			$this->logger->error($msg, [$e]);
+			return $this->showErrorPage($msg);
+		}
+		// prepare redirect script for template
+		$redirectScript = 'window.location.href = \'' . $prompt_uri . '\';';
+		$this->session->set('redirect_script', $redirectScript);
+
+		$tmpl = new Template('twofactor_duo', 'challenge');
+		$tmpl->assign('prompt_uri', $prompt_uri);
+		$tmpl->assign('redirect_script', $redirectScript);
+		return $tmpl;
+	}
+
+	/**
+	 * After we got redirected from Duo, we need to validate the duo_code and
+	 * complete the login process.
+	 *
+	 * @param IUser $user the user which is currently accessing the site
+	 * @param string $duo_code the code obtained from Duo
+	 * @return Template the complete template with its data
+	 */
+	private function completeLoginProcess(IUser $user, string $duo_code): Template {
+		// first we need to check if the Duo Client could be properly initialized
+		if ($this->duoClientInitException != null) {
+			return $this->showErrorPage('Error while initializing Duo Client.');
+		}
+		// if so, we check validate the duo_code
+		try {
+			$this->duoClient->exchangeAuthorizationCodeFor2FAResult($duo_code, $user->getUID());
+		} catch (DuoException $e) {
+			// if there was an error during, to code was either incorrect or there might
+			// be a discrepancy with the system clock - show the error page
+			$msg = 'Error decoding Duo result. Confirm device clock is correct.';
+			$this->logger->error($msg, [$e]);
+			return $this->showErrorPage($msg);
+		}
+		// prepare session for validation step
+		$token = bin2hex(openssl_random_pseudo_bytes(32));;
+		$this->session->set('duo_challenge_complete_token', $token);
+		$completeScript = 'document.getElementById(\'complete-form\').submit();';
+		$this->session->set('complete_script', $completeScript);
+
+		$config = $this->getConfig();
+		$tmpl = new Template('twofactor_duo', 'complete');
+		$tmpl->assign('complete_token', $token);
+		$tmpl->assign('redirect_uri', $config['redirect_uri']);
+		$tmpl->assign('complete_script', $completeScript);
+		return $tmpl;
+	}
+
+	/**
+	 * If anything goes wrong during the 2FA flow with Duo, return the template
+	 * returned by this function.
+	 * The template contains the given error message as well as a button to restart
+	 * the 2FA process.
+	 *
+	 * Besides returning the template that show the error, this also cleans uo
+	 * any remaining state from the current login attempt.
+	 *
+	 * @param string $error_message the error message which will be displayed to the user
+	 * @return Template the error template with its data
+	 */
+	private function showErrorPage(string $error_message): Template {
+		// always remove current state on error
+		$this->session->remove('state');
+
+		$config = $this->getConfig();
+		$tmpl = new Template('twofactor_duo', 'error');
+		$tmpl->assign('error_message', htmlspecialchars($error_message));
+		$tmpl->assign('redirect_uri', $config['redirect_uri']);
+		return $tmpl;
+	}
+
+	/**
+	 * Retrieves the config values for the twofactor_duo provider app.
+	 *
+	 * @return mixed the config set under twofactor_duo
+	 */
+	private function getConfig(): mixed {
+		return $this->config->getSystemValue('twofactor_duo', null);
+	}
+
+	/**
+	 * This method calculates the CSP for the script given as the $scriptContent
+	 * so that it can be added to the site as an inline script without violating
+	 * the CSP.
+	 *
+	 * @param string $scriptContent the exact script that will be added as an inline script
+	 * @return string the CSP header that should be added to the allowed script domains
+	 */
+	private function calculateScriptCSP(string $scriptContent): string {
+		// generate and encode the SHA-256 hash of the script content
+		$hash = hash('sha256', $scriptContent, true);
+		$base64Hash = base64_encode($hash);
+		// generate the CSP header with the hash
+		return '\'self\' \'sha256-' . $base64Hash . '\'';
+	}
 }
