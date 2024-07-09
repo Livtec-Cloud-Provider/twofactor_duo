@@ -37,7 +37,7 @@ use OCP\IUser;
 use OCP\Template;
 use Psr\Log\LoggerInterface;
 
-class DuoProvider implements IProvider, IProvidesCustomCSP, IActivatableByAdmin, IDeactivatableByAdmin {
+class DuoProvider implements IProvider, IProvidesCustomCSP, IActivatableByAdmin, IDeactivatableByAdmin, IProvidesIcons {
 
 	/** @var IConfig */
 	private $config;
@@ -122,8 +122,27 @@ class DuoProvider implements IProvider, IProvidesCustomCSP, IActivatableByAdmin,
 	 *
 	 * @return string
 	 */
-	public function getDescription() : string {
-		return 'Duo';
+	public function getDescription(): string {
+		return 'Uses Cisco Duo for 2FA';
+	}
+
+	/**
+	 * Returns the path to the light icon.
+	 *
+	 * @return string
+	 */
+	public function getLightIcon(): string {
+		return image_path('twofactor_duo', 'duo_icon.png');
+	}
+
+	/**
+	 * Returns the path to the dark icon.
+	 * In this implementation, it's the same as the light icon. Sorry. :)
+	 *
+	 * @return string
+	 */
+	public function getDarkIcon(): string {
+		return $this->getLightIcon();
 	}
 
 	/**
