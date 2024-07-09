@@ -104,7 +104,7 @@ class DuoProvider implements IProvider, IProvidesCustomCSP, IActivatableByAdmin,
 	 *
 	 * @return string
 	 */
-	public function getId() : string {
+	public function getId(): string {
 		return 'duo';
 	}
 
@@ -113,7 +113,7 @@ class DuoProvider implements IProvider, IProvidesCustomCSP, IActivatableByAdmin,
 	 *
 	 * @return string
 	 */
-	public function getDisplayName() : string {
+	public function getDisplayName(): string {
 		return 'Duo';
 	}
 
@@ -224,10 +224,10 @@ class DuoProvider implements IProvider, IProvidesCustomCSP, IActivatableByAdmin,
 	 * @param IUser $user
 	 * @return boolean
 	 */
-	public function isTwoFactorAuthEnabledForUser(IUser $user) : bool {
+	public function isTwoFactorAuthEnabledForUser(IUser $user): bool {
 		return true;
 	}
-	
+
 	/**
 	 * Disable this provider for the given user.
 	 *
@@ -237,10 +237,10 @@ class DuoProvider implements IProvider, IProvidesCustomCSP, IActivatableByAdmin,
 	 *
 	 * @since 15.0.0
 	 */
-	public function disableFor(IUser $user) : bool {
+	public function disableFor(IUser $user): bool {
 		return true;
 	}
-	
+
 	/**
 	 * Enable this provider for the given user.
 	 *
@@ -250,7 +250,7 @@ class DuoProvider implements IProvider, IProvidesCustomCSP, IActivatableByAdmin,
 	 *
 	 * @since 15.0.0
 	 */
-	public function enableFor(IUser $user) : bool {
+	public function enableFor(IUser $user): bool {
 		return true;
 	}
 
