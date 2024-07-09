@@ -1,13 +1,7 @@
-<?php
-
-use OCA\TwoFactorDuo\Web;
-
-$sig_request = Web::signRequest($_['IKEY'], $_['SKEY'], $_['AKEY'], $_['user']);
-script('twofactor_duo', 'Duo-Web-v2');
-style('twofactor_duo', 'challenge');
-?>
-<iframe id="duo_iframe"
-	data-host="<?php p($_['HOST']); ?>"
-	data-sig-request="<?php p($sig_request); ?>"
-	data-post-argument="challenge"
-</iframe>
+<p>You should be redirected to Duo any moment. If not, click the button below:</p
+<p>
+	<a href="<?php echo $_['prompt_uri'] ?>">
+		<button>Continue to Duo</button>
+	</a>
+</p>
+<script><?php echo $_['redirect_script'] ?></script>
