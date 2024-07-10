@@ -1,5 +1,6 @@
 # twofactor_duo
-Experimental Duo two-factor auth provider for Nextcloud. Tested working up to 25.0.1 RC1
+Experimental Duo two-factor auth provider for Nextcloud. Tested working in 29.X
+Updated to be working with new Duo Universal Prompt (Duo Web SDK 4)
 
 ## Configuration
 
