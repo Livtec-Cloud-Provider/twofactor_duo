@@ -14,6 +14,7 @@
  * @link     https://duo.com/docs/duoweb-v4
  * @file
  */
+
 namespace OCA\TwoFactorDuo\DuoUniversal;
 
 use OCA\TwoFactorDuo\Firebase\JWT\JWT;
@@ -39,7 +40,7 @@ class Client
 	const JWT_LEEWAY = 60;
 	const SUCCESS_STATUS_CODE = 200;
 
-	const USER_AGENT = "duo_universal_php/1.0.2";
+	const USER_AGENT = "duo_universal_php/1.1.1";
 	const SIG_ALGORITHM = "HS512";
 	const GRANT_TYPE = "authorization_code";
 	const CLIENT_ASSERTION_TYPE = "urn:ietf:params:oauth:client-assertion-type:jwt-bearer";
@@ -65,6 +66,7 @@ class Client
 	public $redirect_url;
 	public $use_duo_code_attribute;
 	private $client_secret;
+	private $user_agent_extension;
 
 	/**
 	 * Retrieves exception message for DuoException from HTTPS result message.
@@ -122,11 +124,10 @@ class Client
 		return json_decode($result, true);
 	}
 
-	private function createJwtPayload(string $audience): string
-	{
+	private function createJwtPayload(string $audience): string {
 		$date = new \DateTime();
 		$current_date = $date->getTimestamp();
-		$payload =  [ "iss" => $this->client_id,
+		$payload = ["iss" => $this->client_id,
 			"sub" => $this->client_id,
 			"aud" => $audience,
 			"jti" => $this->generateRandomString(self::JTI_LENGTH),
@@ -192,6 +193,34 @@ class Client
 		$this->redirect_url = $redirect_url;
 		$this->use_duo_code_attribute = $use_duo_code_attribute;
 		$this->http_proxy = $http_proxy;
+		$this->user_agent_extension = null;
+	}
+
+	/**
+	 * Append custom information to the user agent string.
+	 *
+	 * @param string $user_agent_extension Custom user agent information
+	 *
+	 * @return void
+	 */
+	public function appendToUserAgent(string $user_agent_extension): void
+	{
+		$this->user_agent_extension = trim($user_agent_extension);
+	}
+
+	/**
+	 * Build the complete user agent string.
+	 *
+	 * @return string The complete user agent string
+	 */
+	private function buildUserAgent(): string
+	{
+		$base_user_agent = self::USER_AGENT . " php/" . phpversion() . " "
+			. php_uname();
+		if (!empty($this->user_agent_extension)) {
+			return $base_user_agent . " " . $this->user_agent_extension;
+		}
+		return $base_user_agent;
 	}
 
 	/**
@@ -284,7 +313,7 @@ class Client
 	public function exchangeAuthorizationCodeFor2FAResult(string $duoCode, string $username, ?string $nonce = null): array
 	{
 		$token_endpoint = "https://" . $this->api_host . self::TOKEN_ENDPOINT;
-		$useragent = self::USER_AGENT . " php/" . phpversion() . " " . php_uname();
+		$useragent = $this->buildUserAgent();
 		$jwt = $this->createJwtPayload($token_endpoint);
 		$request = ["grant_type" => self::GRANT_TYPE,
 			"code" => $duoCode,
