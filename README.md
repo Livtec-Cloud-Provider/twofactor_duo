@@ -1,7 +1,7 @@
 # twofactor_duo
 
-This plugin enables Duo two-factor authentication for Nextcloud. It has been tested to work with Nextcloud 29.X and
-updated to be compatible with the new Duo Universal Prompt (Duo Web SDK 4).
+This plugin enables Duo two-factor authentication for Nextcloud. It has been tested to work with Nextcloud 35.0.3 on PHP
+8.5 and updated to be compatible with the new Duo Universal Prompt (Duo Web SDK 4).
 
 ## Warning
 
